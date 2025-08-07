@@ -1,20 +1,43 @@
 import axios from 'axios';
+import { config } from '@/config/env';
+import { handleApiError, ErrorCodes } from '@/utils/errorHandler';
 import { refreshTokenRequest } from './auth';
 
 const client = axios.create({
-  baseURL: 'http://localhost:8080/api/v1',
+  baseURL: config.api.baseUrl,
+  timeout: config.api.timeout,
+  headers: {
+    'Content-Type': 'application/json',
+  },
 });
 
-client.interceptors.request.use((config) => {
+// Interceptor de request
+client.interceptors.request.use((requestConfig) => {
   const token = localStorage.getItem('token');
   if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+    requestConfig.headers.Authorization = `Bearer ${token}`;
   }
-  return config;
+  
+  // Log de requests en desarrollo
+  if (config.debug.showApiLogs && config.environment.isDevelopment) {
+    console.log(`[API] ${requestConfig.method?.toUpperCase()} ${requestConfig.url}`, {
+      data: requestConfig.data,
+      params: requestConfig.params,
+    });
+  }
+  
+  return requestConfig;
+}, (error) => {
+  // Convertir error de request usando nuestro handler
+  return Promise.reject(handleApiError(error));
 });
 
+// Variables para manejo de refresh token
 let isRefreshing = false;
-let failedQueue: any[] = [];
+let failedQueue: Array<{
+  resolve: (value: string | null) => void;
+  reject: (error: any) => void;
+}> = [];
 
 const processQueue = (error: any, token: string | null = null) => {
   failedQueue.forEach((prom) => {
@@ -27,21 +50,35 @@ const processQueue = (error: any, token: string | null = null) => {
   failedQueue = [];
 };
 
+// Interceptor de response
 client.interceptors.response.use(
-  (res) => res,
-  async (err) => {
-    const originalRequest = err.config;
+  (response) => {
+    // Log de responses exitosos en desarrollo
+    if (config.debug.showApiLogs && config.environment.isDevelopment) {
+      console.log(`[API] ✅ ${response.config.method?.toUpperCase()} ${response.config.url}`, {
+        status: response.status,
+        data: response.data,
+      });
+    }
+    return response;
+  },
+  async (error) => {
+    const originalRequest = error.config;
 
-    if (err.response?.status === 401 && !originalRequest._retry) {
+    // Convertir a AppError usando nuestro handler
+    const appError = handleApiError(error);
+
+    // Manejo especial para token expirado
+    if (appError.code === ErrorCodes.UNAUTHORIZED && !originalRequest._retry) {
       if (isRefreshing) {
-        return new Promise(function (resolve, reject) {
+        return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject });
         })
           .then((token) => {
             originalRequest.headers.Authorization = 'Bearer ' + token;
             return axios(originalRequest);
           })
-          .catch((error) => Promise.reject(error));
+          .catch((err) => Promise.reject(handleApiError(err)));
       }
 
       originalRequest._retry = true;
@@ -60,18 +97,24 @@ client.interceptors.response.use(
 
         originalRequest.headers.Authorization = 'Bearer ' + newToken;
         return client(originalRequest);
-      } catch (err) {
-        processQueue(err, null);
+      } catch (refreshError) {
+        const refreshAppError = handleApiError(refreshError);
+        processQueue(refreshAppError, null);
         localStorage.clear();
-        window.location.href = '/';
-        return Promise.reject(err);
+        
+        // Solo redirigir si no estamos ya en login
+        if (!window.location.pathname.includes('/login')) {
+          window.location.href = '/login';
+        }
+        
+        return Promise.reject(refreshAppError);
       } finally {
         isRefreshing = false;
       }
     }
 
-    return Promise.reject(err);
+    return Promise.reject(appError);
   }
 );
 
-export default client; // 👈 esto es lo que faltaba
+export default client;

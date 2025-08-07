@@ -4,10 +4,17 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev": "vite --mode development",
+    "dev:staging": "vite --mode staging",
+    "build": "tsc -b && vite build --mode production",
+    "build:staging": "tsc -b && vite build --mode staging",
+    "build:dev": "tsc -b && vite build --mode development",
+    "preview": "vite preview",
+    "preview:staging": "vite preview --mode staging",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "lint:fix": "eslint . --fix",
+    "type-check": "tsc --noEmit",
+    "env:check": "node -e \"console.log('Environment:', process.env.NODE_ENV); console.log('Mode:', process.argv.includes('--mode') ? process.argv[process.argv.indexOf('--mode') + 1] : 'default');\""
   },
   "dependencies": {
     "@headlessui/react": "^2.2.7",
